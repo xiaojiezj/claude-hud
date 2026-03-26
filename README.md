@@ -7,6 +7,16 @@ A Claude Code plugin that shows what's happening — context usage, active tools
 
 ![Claude HUD in action](claude-hud-preview-5-2.png)
 
+## 环境变量配置
+
+~/.claude/settings.json
+```
+{
+  "env": {
+    "ZENMUX_MANAGEMENT_API_KEY": "sk-mg-v1-xxxxx"
+  }
+}
+```
 ## Install
 
 Inside a Claude Code instance, run the following commands:
