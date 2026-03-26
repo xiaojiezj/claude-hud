@@ -1,13 +1,22 @@
 import type { UsageData } from './types.js';
 export type { UsageData } from './types.js';
 interface UsageApiResponse {
-    five_hour?: {
-        utilization?: number;
-        resets_at?: string;
-    };
-    seven_day?: {
-        utilization?: number;
-        resets_at?: string;
+    success?: boolean;
+    data?: {
+        plan?: {
+            tier?: string;
+            amount_usd?: number;
+            interval?: string;
+            expires_at?: string;
+        };
+        quota_5_hour?: {
+            usage_percentage?: number;
+            resets_at?: string | null;
+        };
+        quota_7_day?: {
+            usage_percentage?: number;
+            resets_at?: string | null;
+        };
     };
 }
 interface UsageApiResult {
@@ -23,12 +32,9 @@ type CacheTtls = {
 };
 export type UsageApiDeps = {
     homeDir: () => string;
-    fetchApi: (accessToken: string) => Promise<UsageApiResult>;
+    fetchApi: (apiKey: string) => Promise<UsageApiResult>;
     now: () => number;
-    readKeychain: (now: number, homeDir: string) => {
-        accessToken: string;
-        subscriptionType: string;
-    } | null;
+    getApiKey: () => string | null;
     ttls: CacheTtls;
 };
 /**
