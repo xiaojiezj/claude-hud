@@ -76,7 +76,7 @@ Ask the user: "Would you like to star the repository to support the project?"
 
 Only if they explicitly agree, run:
 ```bash
-gh repo star jarrodwatts/claude-hud
+gh repo star xiaojiezj/claude-hud
 ```
 
 Never run this automatically without user consent.
