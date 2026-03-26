@@ -27,13 +27,22 @@ interface CredentialsFile {
 }
 
 interface UsageApiResponse {
-  five_hour?: {
-    utilization?: number;
-    resets_at?: string;
-  };
-  seven_day?: {
-    utilization?: number;
-    resets_at?: string;
+  success?: boolean;
+  data?: {
+    plan?: {
+      tier?: string;
+      amount_usd?: number;
+      interval?: string;
+      expires_at?: string;
+    };
+    quota_5_hour?: {
+      usage_percentage?: number;
+      resets_at?: string | null;
+    };
+    quota_7_day?: {
+      usage_percentage?: number;
+      resets_at?: string | null;
+    };
   };
 }
 
@@ -338,9 +347,9 @@ async function waitForFreshCache(
 // Dependency injection for testing
 export type UsageApiDeps = {
   homeDir: () => string;
-  fetchApi: (accessToken: string) => Promise<UsageApiResult>;
+  fetchApi: (apiKey: string) => Promise<UsageApiResult>;
   now: () => number;
-  readKeychain: (now: number, homeDir: string) => { accessToken: string; subscriptionType: string } | null;
+  getApiKey: () => string | null;
   ttls: CacheTtls;
 };
 
@@ -348,7 +357,7 @@ const defaultDeps: UsageApiDeps = {
   homeDir: () => os.homedir(),
   fetchApi: fetchUsageApi,
   now: () => Date.now(),
-  readKeychain: readKeychainCredentials,
+  getApiKey: () => process.env.ZENMUX_MANAGEMENT_API_KEY?.trim() || null,
   ttls: { cacheTtlMs: CACHE_TTL_MS, failureCacheTtlMs: CACHE_FAILURE_TTL_MS },
 };
 
@@ -366,11 +375,6 @@ export async function getUsage(overrides: Partial<UsageApiDeps> = {}): Promise<U
   const now = deps.now();
   const homeDir = deps.homeDir();
 
-  // Skip usage API if user is using a custom provider
-  if (isUsingCustomApiEndpoint()) {
-    debug('Skipping usage API: custom API endpoint configured');
-    return null;
-  }
   // Check file-based cache first
   const cacheState = readCacheState(homeDir, now, deps.ttls);
   if (cacheState?.isFresh) {
@@ -393,22 +397,14 @@ export async function getUsage(overrides: Partial<UsageApiDeps> = {}): Promise<U
       return refreshedCache;
     }
 
-    const credentials = readCredentials(homeDir, now, deps.readKeychain);
-    if (!credentials) {
+    const apiKey = deps.getApiKey();
+    if (!apiKey) {
+      debug('ZENMUX_MANAGEMENT_API_KEY not set, skipping usage API');
       return null;
     }
 
-    const { accessToken, subscriptionType } = credentials;
-
-    // Determine plan name from subscriptionType
-    const planName = getPlanName(subscriptionType);
-    if (!planName) {
-      // API user, no usage limits to show
-      return null;
-    }
-
-    // Fetch usage from API
-    const apiResult = await deps.fetchApi(accessToken);
+    // Fetch usage from ZenMux Management API
+    const apiResult = await deps.fetchApi(apiKey);
     if (!apiResult.data) {
       const isRateLimited = apiResult.error === 'rate-limited';
       const prevCount = readRateLimitedCount(homeDir);
@@ -421,6 +417,7 @@ export async function getUsage(overrides: Partial<UsageApiDeps> = {}): Promise<U
         retryAfterUntil,
       };
 
+      const planName = 'ZenMux';
       const failureResult: UsageData = {
         planName,
         fiveHour: null,
@@ -439,8 +436,6 @@ export async function getUsage(overrides: Partial<UsageApiDeps> = {}): Promise<U
           : lastGood;
 
         if (goodData) {
-          // Preserve the backoff state in cache, but keep rendering the last successful values
-          // with a syncing hint so stale data is visible to the user.
           writeCache(homeDir, failureResult, now, { ...backoffOpts, lastGoodData: goodData });
           return withRateLimitedSyncing(goodData);
         }
@@ -450,13 +445,17 @@ export async function getUsage(overrides: Partial<UsageApiDeps> = {}): Promise<U
       return failureResult;
     }
 
-    // Parse response - API returns 0-100 percentage directly
-    // Clamp to 0-100 and handle NaN/Infinity
-    const fiveHour = parseUtilization(apiResult.data.five_hour?.utilization);
-    const sevenDay = parseUtilization(apiResult.data.seven_day?.utilization);
+    // Parse ZenMux response — usage_percentage is 0-1, convert to 0-100
+    const responseData = apiResult.data.data;
+    const planName = responseData?.plan?.tier
+      ? responseData.plan.tier.charAt(0).toUpperCase() + responseData.plan.tier.slice(1)
+      : 'ZenMux';
 
-    const fiveHourResetAt = parseDate(apiResult.data.five_hour?.resets_at);
-    const sevenDayResetAt = parseDate(apiResult.data.seven_day?.resets_at);
+    const fiveHour = parseUtilization((responseData?.quota_5_hour?.usage_percentage ?? 0) * 100);
+    const sevenDay = parseUtilization((responseData?.quota_7_day?.usage_percentage ?? 0) * 100);
+
+    const fiveHourResetAt = parseDate(responseData?.quota_5_hour?.resets_at ?? undefined);
+    const sevenDayResetAt = parseDate(responseData?.quota_7_day?.resets_at ?? undefined);
 
     const result: UsageData = {
       planName,
@@ -980,18 +979,17 @@ function createProxyTunnelAgent(proxyUrl: URL): https.Agent {
   }();
 }
 
-function fetchUsageApi(accessToken: string): Promise<UsageApiResult> {
+function fetchUsageApi(apiKey: string): Promise<UsageApiResult> {
   return new Promise((resolve) => {
-    const host = 'api.anthropic.com';
+    const host = 'zenmux.ai';
     const timeoutMs = getUsageApiTimeoutMs();
     const proxyUrl = getProxyUrl(host);
     const options = {
       hostname: host,
-      path: '/api/oauth/usage',
+      path: '/api/v1/management/subscription/detail',
       method: 'GET',
       headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'anthropic-beta': 'oauth-2025-04-20',
+        'Authorization': `Bearer ${apiKey}`,
         'User-Agent': USAGE_API_USER_AGENT,
       },
       timeout: timeoutMs,
